@@ -23,8 +23,8 @@ export interface SchemaChange {
 // WebSocket URL helper
 const getWebSocketUrl = (schemaId: string) => {
   if (import.meta.env.DEV) {
-    const wsPort = import.meta.env.VITE_WS_PORT || '8080';
-    return `ws://localhost:${wsPort}/collaboration/${schemaId}`;
+    // Backend server WebSocket portunu 5000 olaraq düzəlt
+    return `ws://localhost:5000/ws/collaboration/${schemaId}`;
   }
   
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -38,8 +38,9 @@ export default class CollaborationService {
   private schemaId: string | null = null;
   private eventHandlers: Map<string, Function[]> = new Map();
   private reconnectAttempts = 0;
-  private maxReconnectAttempts = 5;
-  private reconnectInterval = 3000;
+  private maxReconnectAttempts = 3;
+  private reconnectInterval = 5000;
+  private isIntentionalDisconnect = false;
 
   constructor() {
     // Constructor boş
@@ -102,12 +103,14 @@ export default class CollaborationService {
           console.log('❌ WebSocket closed:', event.code, event.reason);
           this.emit('disconnected');
           
-          // Otomatik yenidən bağlanma
-          if (this.reconnectAttempts < this.maxReconnectAttempts) {
+          // Sadəcə məqsədli disconnect olmadıqda yenidən bağlan
+          if (!this.isIntentionalDisconnect && this.reconnectAttempts < this.maxReconnectAttempts) {
             this.reconnectAttempts++;
             console.log(`🔄 Reconnecting... Attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts}`);
             setTimeout(() => {
-              this.connect();
+              if (!this.isIntentionalDisconnect) {
+                this.connect();
+              }
             }, this.reconnectInterval);
           }
         };
@@ -252,6 +255,8 @@ export default class CollaborationService {
   }
 
   disconnect() {
+    this.isIntentionalDisconnect = true;
+    
     if (this.socket && this.currentUser) {
       this.sendMessage({
         type: 'user_leave',
@@ -265,6 +270,7 @@ export default class CollaborationService {
       this.socket = null;
     }
     
+    this.reconnectAttempts = 0;
     console.log('🔌 Disconnected from WebSocket');
   }
 

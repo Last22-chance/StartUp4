@@ -32,7 +32,7 @@ const PortfolioManager: React.FC = () => {
   
   // Real-time portfolio updates via WebSocket
   const wsUrl = import.meta.env.DEV 
-    ? 'ws://localhost:8080/portfolio-updates'
+    ? 'ws://localhost:5000/ws/portfolio-updates'
     : `wss://${window.location.host}/ws/portfolio-updates`;
     
   const { isConnected, sendMessage } = useWebSocket({
@@ -40,7 +40,9 @@ const PortfolioManager: React.FC = () => {
     onMessage: (message) => {
       handlePortfolioUpdate(message);
     },
-    autoConnect: true
+    autoConnect: true,
+    enableReconnect: false,
+    reconnectAttempts: 0
   });
   
   const handlePortfolioUpdate = (message: any) => {
