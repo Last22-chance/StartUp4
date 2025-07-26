@@ -753,55 +753,95 @@ app.post('/api/paypal/capture-order', async (req, res) => {
 
 app.ws('/ws/collaboration/:schemaId', (ws, req) => {
   const { schemaId } = req.params;
-  console.log(`👥 Collaboration socket opened: ${schemaId}`);
+  const clientId = `collab_${schemaId}_${Date.now()}`;
+  console.log(`👥 [${clientId}] Collaboration socket opened for schema: ${schemaId}`);
 
-  // Heartbeat to keep connection alive
+  // Send welcome message
+  ws.send(JSON.stringify({
+    type: 'connection_established',
+    clientId,
+    schemaId,
+    timestamp: new Date().toISOString()
+  }));
+
+  // Reduced heartbeat interval
   const heartbeat = setInterval(() => {
     if (ws.readyState === 1) {
-      ws.ping();
+      try {
+        ws.ping();
+      } catch (error) {
+        console.error(`👥 [${clientId}] Ping failed:`, error);
+        clearInterval(heartbeat);
+      }
     } else {
+      console.log(`👥 [${clientId}] WebSocket not ready, clearing heartbeat`);
       clearInterval(heartbeat);
     }
-  }, 30000);
+  }, 60000); // Increase to 60 seconds
 
   ws.on('message', msg => {
     try {
+      const message = JSON.parse(msg.toString());
+      console.log(`👥 [${clientId}] Received message:`, message.type);
+      
+      // Broadcast to other clients in the same schema
       wsInstance.getWss().clients.forEach(client => {
         if (client !== ws && client.readyState === 1) {
           client.send(msg);
         }
       });
     } catch (error) {
-      console.error('Error broadcasting message:', error);
+      console.error(`👥 [${clientId}] Error processing message:`, error);
     }
   });
 
-  ws.on('close', () => {
-    console.log(`👥 Collaboration socket closed: ${schemaId}`);
+  ws.on('close', (code, reason) => {
+    console.log(`👥 [${clientId}] Socket closed - Code: ${code}, Reason: ${reason}`);
     clearInterval(heartbeat);
   });
 
   ws.on('error', (error) => {
-    console.error(`👥 Collaboration socket error for ${schemaId}:`, error);
+    console.error(`👥 [${clientId}] Socket error:`, error);
     clearInterval(heartbeat);
+  });
+
+  ws.on('pong', () => {
+    console.log(`👥 [${clientId}] Pong received`);
   });
 });
 // server.cjs (express-ws konfiqurasiyasından sonra)
 app.ws('/ws/portfolio-updates', (ws, req) => {
-  console.log('📋 Client subscribed to portfolio-updates');
+  const clientId = `portfolio_${Date.now()}`;
+  console.log(`📋 [${clientId}] Client subscribed to portfolio-updates`);
 
-  // Heartbeat to prevent connection drops
+  // Send welcome message
+  ws.send(JSON.stringify({
+    type: 'portfolio_connection_established',
+    clientId,
+    timestamp: new Date().toISOString()
+  }));
+
+  // Reduced heartbeat to prevent frequent disconnections
   const heartbeat = setInterval(() => {
     if (ws.readyState === 1) {
-      ws.ping();
+      try {
+        ws.ping();
+      } catch (error) {
+        console.error(`📋 [${clientId}] Ping failed:`, error);
+        clearInterval(heartbeat);
+      }
     } else {
+      console.log(`📋 [${clientId}] WebSocket not ready, clearing heartbeat`);
       clearInterval(heartbeat);
     }
-  }, 30000);
+  }, 60000); // Increase to 60 seconds
 
   // Nümunə: maqəzaları broadcast etmək üçün:
   ws.on('message', msg => {
     try {
+      const message = JSON.parse(msg.toString());
+      console.log(`📋 [${clientId}] Received message:`, message.type);
+      
       // Gələn portfolio yenilənməsini bütün digər client-lərə yolla
       wsInstance.getWss().clients.forEach(client => {
         if (client !== ws && client.readyState === 1) {
@@ -809,18 +849,22 @@ app.ws('/ws/portfolio-updates', (ws, req) => {
         }
       });
     } catch (error) {
-      console.error('Error broadcasting portfolio update:', error);
+      console.error(`📋 [${clientId}] Error processing message:`, error);
     }
   });
 
-  ws.on('close', () => {
-    console.log('📋 Portfolio-updates socket closed');
+  ws.on('close', (code, reason) => {
+    console.log(`📋 [${clientId}] Socket closed - Code: ${code}, Reason: ${reason}`);
     clearInterval(heartbeat);
   });
 
   ws.on('error', (error) => {
-    console.error('📋 Portfolio-updates socket error:', error);
+    console.error(`📋 [${clientId}] Socket error:`, error);
     clearInterval(heartbeat);
+  });
+
+  ws.on('pong', () => {
+    console.log(`📋 [${clientId}] Pong received`);
   });
 });
 
