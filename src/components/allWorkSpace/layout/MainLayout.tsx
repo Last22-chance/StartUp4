@@ -49,7 +49,14 @@ const MainLayout: React.FC = () => {
 
         const handleCursorUpdate = (cursor: any) => {
           console.log('📍 Cursor update received in MainLayout:', cursor);
-          if (cursor && cursor.userId && typeof cursor.userId === 'string') {
+          
+          // Robust validation for cursor data
+          if (cursor && 
+              typeof cursor === 'object' && 
+              cursor.userId && 
+              typeof cursor.userId === 'string' &&
+              cursor.userId.trim().length > 0) {
+            
             setCollaborativeCursors(prev => {
               const filtered = prev.filter(c => c.userId !== cursor.userId);
               return [...filtered, {
@@ -63,8 +70,11 @@ const MainLayout: React.FC = () => {
           } else {
             console.warn('⚠️ Invalid cursor data received in MainLayout:', {
               cursor,
+              cursorType: typeof cursor,
               hasUserId: !!cursor?.userId,
-              userIdType: typeof cursor?.userId
+              userIdType: typeof cursor?.userId,
+              userIdValue: cursor?.userId,
+              isValidString: cursor?.userId && typeof cursor.userId === 'string' && cursor.userId.trim().length > 0
             });
           }
         };

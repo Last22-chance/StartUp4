@@ -3,6 +3,9 @@ class SimpleWebSocketService {
   private static instance: SimpleWebSocketService;
   private connections: Map<string, WebSocket> = new Map();
   private reconnectTimeouts: Map<string, NodeJS.Timeout> = new Map();
+  private reconnectAttempts: Map<string, number> = new Map();
+  private maxReconnectAttempts = 5;
+  private baseReconnectDelay = 2000; // 2 seconds
 
   private constructor() {}
 
@@ -20,31 +23,41 @@ class SimpleWebSocketService {
     onError?: (error: any) => void;
     enableReconnect?: boolean;
   } = {}): string {
-    const connectionId = `${url}_${Date.now()}`;
+    const urlPath = url.split('/').slice(-2).join('/'); // Get last 2 parts for ID
+    const connectionId = `${urlPath}_${Date.now()}`;
     
-    // Close existing connections for this URL to prevent duplicates
+    // Close existing connections for this URL pattern to prevent duplicates
     const existingConnections = Array.from(this.connections.entries())
-      .filter(([id, socket]) => id.includes(url.split('/').pop() || ''));
+      .filter(([id, socket]) => {
+        const idPath = id.split('_')[0];
+        return idPath === urlPath;
+      });
     
     existingConnections.forEach(([id, socket]) => {
       console.log(`🔌 Closing existing connection: ${id}`);
       socket.close(1000, 'Replacing with new connection');
       this.connections.delete(id);
       
-      // Clear any reconnect timeout for the old connection
+      // Clear any reconnect timeout and attempts for the old connection
       const timeout = this.reconnectTimeouts.get(id);
       if (timeout) {
         clearTimeout(timeout);
         this.reconnectTimeouts.delete(id);
       }
+      this.reconnectAttempts.delete(id);
     });
 
     try {
       console.log(`🔗 Creating new WebSocket connection: ${url}`);
       const socket = new WebSocket(url);
 
+      // Reset reconnect attempts for new connection
+      this.reconnectAttempts.set(connectionId, 0);
+
       socket.onopen = () => {
         console.log(`✅ WebSocket connected: ${url}`);
+        // Reset reconnect attempts on successful connection
+        this.reconnectAttempts.set(connectionId, 0);
         options.onOpen?.();
       };
 
@@ -71,14 +84,33 @@ class SimpleWebSocketService {
         
         options.onClose?.();
 
-        // Only reconnect for unexpected closures (not manual disconnects)
-        if (options.enableReconnect && event.code !== 1000 && event.code !== 1001) {
-          // Exponential backoff for reconnection
-          const timeout = setTimeout(() => {
-            console.log(`🔄 Reconnecting to: ${url} (previous code: ${event.code})`);
-            this.connect(url, options);
-          }, 3000); // Reduced from 5s to 3s
-          this.reconnectTimeouts.set(connectionId, timeout);
+        // Only reconnect for unexpected closures and if reconnect is enabled
+        if (options.enableReconnect && 
+            event.code !== 1000 && // Normal closure
+            event.code !== 1001 && // Going away
+            event.code !== 1005) { // No status received (often manual disconnect)
+          
+          const attempts = this.reconnectAttempts.get(connectionId) || 0;
+          
+          if (attempts < this.maxReconnectAttempts) {
+            // Exponential backoff with jitter
+            const delay = this.baseReconnectDelay * Math.pow(2, attempts) + Math.random() * 1000;
+            
+            console.log(`🔄 Scheduling reconnection attempt ${attempts + 1}/${this.maxReconnectAttempts} in ${Math.round(delay)}ms`);
+            
+            const timeout = setTimeout(() => {
+              this.reconnectAttempts.set(connectionId, attempts + 1);
+              console.log(`🔄 Reconnecting to: ${url} (attempt ${attempts + 1})`);
+              
+              // Create new connection with same options
+              this.connect(url, options);
+            }, delay);
+            
+            this.reconnectTimeouts.set(connectionId, timeout);
+          } else {
+            console.warn(`❌ Max reconnection attempts (${this.maxReconnectAttempts}) reached for ${url}`);
+            this.reconnectAttempts.delete(connectionId);
+          }
         }
       };
 
@@ -104,11 +136,13 @@ class SimpleWebSocketService {
       this.connections.delete(connectionId);
     }
 
+    // Clear reconnect data
     const timeout = this.reconnectTimeouts.get(connectionId);
     if (timeout) {
       clearTimeout(timeout);
       this.reconnectTimeouts.delete(connectionId);
     }
+    this.reconnectAttempts.delete(connectionId);
   }
 
   disconnectAll() {
@@ -118,10 +152,12 @@ class SimpleWebSocketService {
     });
     this.connections.clear();
 
+    // Clear all reconnect data
     this.reconnectTimeouts.forEach((timeout) => {
       clearTimeout(timeout);
     });
     this.reconnectTimeouts.clear();
+    this.reconnectAttempts.clear();
   }
 
   sendMessage(connectionId: string, message: any) {
@@ -133,13 +169,42 @@ class SimpleWebSocketService {
         console.error(`Failed to send message to ${connectionId}:`, error);
       }
     } else {
-      console.warn(`WebSocket not connected for ${connectionId}, message not sent:`, message);
+      const state = socket ? this.getReadyStateString(socket.readyState) : 'NOT_FOUND';
+      console.warn(`WebSocket not ready for ${connectionId} (state: ${state}), message not sent:`, {
+        messageType: message.type,
+        socketExists: !!socket,
+        readyState: state
+      });
     }
   }
 
   isConnected(connectionId: string): boolean {
     const socket = this.connections.get(connectionId);
     return socket?.readyState === WebSocket.OPEN;
+  }
+
+  private getReadyStateString(state: number): string {
+    switch (state) {
+      case WebSocket.CONNECTING: return 'CONNECTING';
+      case WebSocket.OPEN: return 'OPEN';
+      case WebSocket.CLOSING: return 'CLOSING';
+      case WebSocket.CLOSED: return 'CLOSED';
+      default: return 'UNKNOWN';
+    }
+  }
+
+  // Debug method to get connection info
+  getConnectionInfo(): { [key: string]: any } {
+    const info: { [key: string]: any } = {};
+    this.connections.forEach((socket, id) => {
+      info[id] = {
+        readyState: this.getReadyStateString(socket.readyState),
+        url: socket.url,
+        hasReconnectTimeout: this.reconnectTimeouts.has(id),
+        reconnectAttempts: this.reconnectAttempts.get(id) || 0
+      };
+    });
+    return info;
   }
 }
 

@@ -60,7 +60,7 @@ export default class CollaborationService {
         return;
       }
 
-      if (this.isConnected) {
+      if (this.isConnected && this.connectionId) {
         console.log('✅ WebSocket already connected');
         resolve();
         return;
@@ -85,7 +85,7 @@ export default class CollaborationService {
                   schemaId: this.schemaId!
                 });
               }
-            }, 100);
+            }, 200); // Increased delay to 200ms
             
             this.emit('connected');
             resolve();
@@ -119,7 +119,7 @@ export default class CollaborationService {
     switch (message.type) {
       case 'connection_established':
         console.log('🔗 Connection established with server, clientId:', message.clientId);
-        // Optionally store clientId for future reference
+        // Store clientId for future reference if needed
         break;
         
       case 'user_joined':
@@ -133,18 +133,24 @@ export default class CollaborationService {
         break;
         
       case 'cursor_update':
-        // Server sends cursor data in 'data' field, handle both cases
-        const cursorData = message.data || message.cursor;
-        if (cursorData && cursorData.userId) {
+        // Server sends cursor data in 'data' field according to websocket-server.cjs
+        const cursorData = message.data;
+        
+        // Validate cursor data structure
+        if (cursorData && 
+            typeof cursorData === 'object' && 
+            cursorData.userId && 
+            typeof cursorData.userId === 'string') {
+          
           console.log('📍 Valid cursor update received:', cursorData);
           this.emit('cursor_update', cursorData);
         } else {
           console.warn('⚠️ Invalid cursor_update message structure:', {
+            message,
             hasData: !!message.data,
-            hasCursor: !!message.cursor,
+            dataType: typeof message.data,
             dataUserId: message.data?.userId,
-            cursorUserId: message.cursor?.userId,
-            fullMessage: message
+            userIdType: typeof message.data?.userId
           });
         }
         break;
@@ -164,10 +170,11 @@ export default class CollaborationService {
         
       case 'pong':
         // Heartbeat response
+        console.log('💓 Heartbeat pong received');
         break;
         
       default:
-        console.log('❓ Unknown message type:', message.type);
+        console.log('❓ Unknown message type:', message.type, message);
     }
   }
 
@@ -177,7 +184,7 @@ export default class CollaborationService {
       return;
     }
 
-    this.sendMessage({
+    const cursorMessage = {
       type: 'cursor_update',
       cursor: {
         userId: this.currentUser.id,
@@ -186,7 +193,10 @@ export default class CollaborationService {
         color: this.currentUser.color,
         lastSeen: new Date().toISOString()
       }
-    });
+    };
+
+    console.log('📍 Sending cursor update:', cursorMessage);
+    this.sendMessage(cursorMessage);
   }
 
   sendSchemaChange(change: SchemaChange) {
@@ -223,10 +233,15 @@ export default class CollaborationService {
   }
 
   private sendMessage(message: any) {
-    if (this.connectionId && this.isConnected) {
+    if (this.connectionId && this.isConnected && simpleWebSocketService.isConnected(this.connectionId)) {
       simpleWebSocketService.sendMessage(this.connectionId, message);
     } else {
-      console.warn('⚠️ WebSocket not connected, message not sent:', message.type);
+      console.warn('⚠️ WebSocket not connected or ready, message not sent:', {
+        messageType: message.type,
+        connectionId: this.connectionId,
+        isConnected: this.isConnected,
+        serviceConnected: this.connectionId ? simpleWebSocketService.isConnected(this.connectionId) : false
+      });
     }
   }
 
@@ -249,7 +264,7 @@ export default class CollaborationService {
 
   private emit(event: string, data?: any) {
     const handlers = this.eventHandlers.get(event);
-    if (handlers) {
+    if (handlers && handlers.length > 0) {
       handlers.forEach(handler => {
         try {
           handler(data);
@@ -277,7 +292,7 @@ export default class CollaborationService {
           simpleWebSocketService.disconnect(this.connectionId);
           this.connectionId = null;
         }
-      }, 50);
+      }, 100);
     } else if (this.connectionId) {
       simpleWebSocketService.disconnect(this.connectionId);
       this.connectionId = null;
@@ -289,13 +304,14 @@ export default class CollaborationService {
 
   // Utility methods
   isConnectedState(): boolean {
-    return this.isConnected && this.connectionId !== null && 
+    return this.isConnected && 
+           this.connectionId !== null && 
            simpleWebSocketService.isConnected(this.connectionId);
   }
 
   getConnectionState(): string {
     if (!this.connectionId) return 'CLOSED';
-    return this.isConnected ? 'OPEN' : 'CLOSED';
+    return this.isConnectedState() ? 'OPEN' : 'CLOSED';
   }
 
   // Conflict resolution methods
