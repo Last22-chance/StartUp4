@@ -4,6 +4,7 @@ import { Menu, X, ChevronLeft, ChevronRight } from 'lucide-react';
 import Header from './Header';
 import WorkspacePanel from '../panels/WorkspacePanel';
 import PortfolioPanel from '../panels/PortfolioPanel';
+import ToolsPanel from '../panels/ToolsPanel';
 import CollaborativeCursors, { CursorData } from '../workspace/CollaborativeCursors';
 import { useDatabase } from '../../../context/DatabaseContext';
 import { collaborationService, CollaborationUser } from '../../../services/collaborationService';
@@ -19,66 +20,78 @@ const MainLayout: React.FC = () => {
   const { currentSchema, syncWorkspaceWithMongoDB } = useDatabase();
 
   useEffect(() => {
-    // 1) Hazırki istifadəçi (real layihədə auth sistemi ilə gələcək)
-    const currentUser: CollaborationUser = {
-      id: `user_${Math.random().toString(36).substr(2, 9)}`,
-      username: 'Anonymous User',
-      role: 'editor',
-      color: `#${Math.floor(Math.random() * 0xFFFFFF).toString(16)}`
+    let timeoutId: NodeJS.Timeout;
+    
+    const initializeCollaboration = () => {
+      // 1) Hazırki istifadəçi (real layihədə auth sistemi ilə gələcək)
+      const currentUser: CollaborationUser = {
+        id: `user_${Math.random().toString(36).substr(2, 9)}`,
+        username: 'Anonymous User',
+        role: 'editor',
+        color: `#${Math.floor(Math.random() * 0xFFFFFF).toString(16)}`
+      };
+
+      // 2) service-i initialize elə və qoşul
+      collaborationService.initialize(currentUser, currentSchema.id);
+
+      collaborationService.on('connected', () => {
+        console.log('✅ Collaboration connected');
+        setIsCollaborationConnected(true);
+      });
+      collaborationService.on('disconnected', () => {
+        console.log('❌ Collaboration disconnected');
+        setIsCollaborationConnected(false);
+      });
+
+      collaborationService.on('schema_change', () => {
+        console.log('🔄 Schema changed, syncing…');
+        syncWorkspaceWithMongoDB();
+      });
+
+      collaborationService.on('cursor_update', (cursor: any) => {
+        const cd: CursorData = {
+          userId: cursor.userId,
+          username: cursor.username,
+          position: cursor.position,
+          color: cursor.color,
+          lastSeen: new Date(cursor.lastSeen)
+        };
+        setCollaborativeCursors(prev => {
+          const i = prev.findIndex(c => c.userId === cd.userId);
+          if (i >= 0) {
+            const arr = [...prev];
+            arr[i] = cd;
+            return arr;
+          }
+          return [...prev, cd];
+        });
+      });
+
+      collaborationService.on('user_joined', (user: CollaborationUser) => {
+        console.log('👤 Joined:', user.username);
+      });
+      collaborationService.on('user_left', (userId: string) => {
+        console.log('👤 Left:', userId);
+        setCollaborativeCursors(prev => prev.filter(c => c.userId !== userId));
+      });
+
+      collaborationService.on('error', err => {
+        console.error('❌ Collaboration error:', err);
+      });
+
+      // Qoşulmanı 1 saniyə gecikdir ki, spam olmasın
+      timeoutId = setTimeout(() => {
+        collaborationService.connect();
+      }, 1000);
     };
 
-    // 2) service-i initialize elə və qoşul
-    collaborationService.initialize(currentUser, currentSchema.id);
-
-    collaborationService.on('connected', () => {
-      console.log('✅ Collaboration connected');
-      setIsCollaborationConnected(true);
-    });
-    collaborationService.on('disconnected', () => {
-      console.log('❌ Collaboration disconnected');
-      setIsCollaborationConnected(false);
-    });
-
-    collaborationService.on('schema_change', () => {
-      console.log('🔄 Schema changed, syncing…');
-      syncWorkspaceWithMongoDB();
-    });
-
-    collaborationService.on('cursor_update', (cursor: any) => {
-      const cd: CursorData = {
-        userId: cursor.userId,
-        username: cursor.username,
-        position: cursor.position,
-        color: cursor.color,
-        lastSeen: new Date(cursor.lastSeen)
-      };
-      setCollaborativeCursors(prev => {
-        const i = prev.findIndex(c => c.userId === cd.userId);
-        if (i >= 0) {
-          const arr = [...prev];
-          arr[i] = cd;
-          return arr;
-        }
-        return [...prev, cd];
-      });
-    });
-
-    collaborationService.on('user_joined', (user: CollaborationUser) => {
-      console.log('👤 Joined:', user.username);
-    });
-    collaborationService.on('user_left', (userId: string) => {
-      console.log('👤 Left:', userId);
-      setCollaborativeCursors(prev => prev.filter(c => c.userId !== userId));
-    });
-
-    collaborationService.on('error', err => {
-      console.error('❌ Collaboration error:', err);
-    });
-
-    collaborationService.connect();
+    initializeCollaboration();
 
     // Cleanup
     return () => {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
       collaborationService.disconnect();
     };
   }, [currentSchema.id, syncWorkspaceWithMongoDB]);
@@ -180,6 +193,9 @@ const MainLayout: React.FC = () => {
               <X className="w-5 h-5 text-gray-600 dark:text-gray-400" />
             </button>
           </div>
+          
+          {/* Tools Panel Content */}
+          <ToolsPanel collapsed={leftPanelCollapsed} />
         </div>
 
         {/* Center Panel - Workspace */}
