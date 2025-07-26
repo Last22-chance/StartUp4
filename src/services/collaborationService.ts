@@ -20,10 +20,11 @@ export interface SchemaChange {
   timestamp: Date;
 }
 
+import { simpleWebSocketService } from './simpleWebSocketService';
+
 // WebSocket URL helper
 const getWebSocketUrl = (schemaId: string) => {
   if (import.meta.env.DEV) {
-    // Backend server WebSocket portunu 5000 olaraq düzəlt
     return `ws://localhost:5000/ws/collaboration/${schemaId}`;
   }
   
@@ -33,13 +34,11 @@ const getWebSocketUrl = (schemaId: string) => {
 };
 
 export default class CollaborationService {
-  private socket: WebSocket | null = null;
+  private connectionId: string | null = null;
   private currentUser: CollaborationUser | null = null;
   private schemaId: string | null = null;
   private eventHandlers: Map<string, Function[]> = new Map();
-  private reconnectAttempts = 0;
-  private maxReconnectAttempts = 3;
-  private reconnectInterval = 5000;
+  private isConnected = false;
   private isIntentionalDisconnect = false;
 
   constructor() {
@@ -61,65 +60,47 @@ export default class CollaborationService {
         return;
       }
 
-      if (this.socket?.readyState === WebSocket.OPEN) {
+      if (this.isConnected) {
         console.log('✅ WebSocket already connected');
         resolve();
         return;
       }
 
       const url = getWebSocketUrl(this.schemaId);
-      console.log('🔗 Connecting to WebSocket:', url);
+      console.log('🔗 Connecting to WebSocket via SimpleWebSocketService:', url);
       
       try {
-        this.socket = new WebSocket(url);
-
-        this.socket.onopen = () => {
-          console.log('✅ WebSocket connected successfully');
-          this.reconnectAttempts = 0;
-          
-          // İstifadəçi qoşulma mesajı göndər
-          this.sendMessage({
-            type: 'user_join',
-            userId: this.currentUser!.id,
-            username: this.currentUser!.username,
-            schemaId: this.schemaId!
-          });
-          
-          this.emit('connected');
-          resolve();
-        };
-
-        this.socket.onmessage = (event) => {
-          try {
-            const message = JSON.parse(event.data);
-            console.log('📨 Received message:', message.type);
+        this.connectionId = simpleWebSocketService.connect(url, {
+          onOpen: () => {
+            console.log('✅ Collaboration WebSocket connected successfully');
+            this.isConnected = true;
+            
+            // Send user join message after connection is established
+            this.sendMessage({
+              type: 'user_join',
+              userId: this.currentUser!.id,
+              username: this.currentUser!.username,
+              schemaId: this.schemaId!
+            });
+            
+            this.emit('connected');
+            resolve();
+          },
+          onMessage: (message) => {
             this.handleMessage(message);
-          } catch (error) {
-            console.error('❌ Failed to parse message:', error);
-          }
-        };
-
-        this.socket.onclose = (event) => {
-          console.log('❌ WebSocket closed:', event.code, event.reason);
-          this.emit('disconnected');
-          
-          // Sadəcə məqsədli disconnect olmadıqda yenidən bağlan
-          if (!this.isIntentionalDisconnect && this.reconnectAttempts < this.maxReconnectAttempts) {
-            this.reconnectAttempts++;
-            console.log(`🔄 Reconnecting... Attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts}`);
-            setTimeout(() => {
-              if (!this.isIntentionalDisconnect) {
-                this.connect();
-              }
-            }, this.reconnectInterval);
-          }
-        };
-
-        this.socket.onerror = (error) => {
-          console.error('❌ WebSocket error:', error);
-          this.emit('error', error);
-          reject(error);
-        };
+          },
+          onClose: () => {
+            console.log('❌ Collaboration WebSocket disconnected');
+            this.isConnected = false;
+            this.emit('disconnected');
+          },
+          onError: (error) => {
+            console.error('❌ Collaboration WebSocket error:', error);
+            this.emit('error', error);
+            reject(error);
+          },
+          enableReconnect: !this.isIntentionalDisconnect
+        });
 
       } catch (error) {
         console.error('❌ Failed to create WebSocket:', error);
@@ -129,7 +110,13 @@ export default class CollaborationService {
   }
 
   private handleMessage(message: any) {
+    console.log('📨 Received collaboration message:', message.type, message);
+    
     switch (message.type) {
+      case 'connection_established':
+        console.log('🔗 Connection established:', message.clientId);
+        break;
+        
       case 'user_joined':
         console.log('👋 User joined:', message.user?.username);
         this.emit('user_joined', message.user);
@@ -141,7 +128,13 @@ export default class CollaborationService {
         break;
         
       case 'cursor_update':
-        this.emit('cursor_update', message.data);
+        // Fix: ensure cursor data has proper structure
+        const cursorData = message.data || message.cursor;
+        if (cursorData && cursorData.userId) {
+          this.emit('cursor_update', cursorData);
+        } else {
+          console.warn('⚠️ Invalid cursor_update message structure:', message);
+        }
         break;
         
       case 'schema_change':
@@ -167,13 +160,18 @@ export default class CollaborationService {
   }
 
   sendCursorUpdate(position: CursorPosition) {
+    if (!this.currentUser) {
+      console.warn('⚠️ Cannot send cursor update: no current user');
+      return;
+    }
+
     this.sendMessage({
       type: 'cursor_update',
       cursor: {
-        userId: this.currentUser!.id,
-        username: this.currentUser!.username,
+        userId: this.currentUser.id,
+        username: this.currentUser.username,
         position,
-        color: this.currentUser!.color,
+        color: this.currentUser.color,
         lastSeen: new Date().toISOString()
       }
     });
@@ -213,12 +211,8 @@ export default class CollaborationService {
   }
 
   private sendMessage(message: any) {
-    if (this.socket?.readyState === WebSocket.OPEN) {
-      try {
-        this.socket.send(JSON.stringify(message));
-      } catch (error) {
-        console.error('❌ Failed to send message:', error);
-      }
+    if (this.connectionId && this.isConnected) {
+      simpleWebSocketService.sendMessage(this.connectionId, message);
     } else {
       console.warn('⚠️ WebSocket not connected, message not sent:', message.type);
     }
@@ -257,7 +251,7 @@ export default class CollaborationService {
   disconnect() {
     this.isIntentionalDisconnect = true;
     
-    if (this.socket && this.currentUser) {
+    if (this.connectionId && this.currentUser) {
       this.sendMessage({
         type: 'user_leave',
         userId: this.currentUser.id,
@@ -265,30 +259,24 @@ export default class CollaborationService {
       });
     }
     
-    if (this.socket) {
-      this.socket.close();
-      this.socket = null;
+    if (this.connectionId) {
+      simpleWebSocketService.disconnect(this.connectionId);
+      this.connectionId = null;
     }
     
-    this.reconnectAttempts = 0;
+    this.isConnected = false;
     console.log('🔌 Disconnected from WebSocket');
   }
 
   // Utility methods
-  isConnected(): boolean {
-    return this.socket?.readyState === WebSocket.OPEN;
+  isConnectedState(): boolean {
+    return this.isConnected && this.connectionId !== null && 
+           simpleWebSocketService.isConnected(this.connectionId);
   }
 
   getConnectionState(): string {
-    if (!this.socket) return 'CLOSED';
-    
-    switch (this.socket.readyState) {
-      case WebSocket.CONNECTING: return 'CONNECTING';
-      case WebSocket.OPEN: return 'OPEN';
-      case WebSocket.CLOSING: return 'CLOSING';
-      case WebSocket.CLOSED: return 'CLOSED';
-      default: return 'UNKNOWN';
-    }
+    if (!this.connectionId) return 'CLOSED';
+    return this.isConnected ? 'OPEN' : 'CLOSED';
   }
 
   // Conflict resolution methods

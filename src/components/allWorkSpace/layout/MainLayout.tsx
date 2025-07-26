@@ -8,7 +8,6 @@ import ToolsPanel from '../panels/ToolsPanel';
 import CollaborativeCursors, { CursorData } from '../workspace/CollaborativeCursors';
 import { useDatabase } from '../../../context/DatabaseContext';
 import { collaborationService, CollaborationUser } from '../../../services/collaborationService';
-import { simpleWebSocketService } from '../../../services/simpleWebSocketService';
 
 const MainLayout: React.FC = () => {
   const [leftPanelOpen, setLeftPanelOpen] = useState(false);
@@ -21,49 +20,98 @@ const MainLayout: React.FC = () => {
   const { currentSchema, syncWorkspaceWithMongoDB } = useDatabase();
 
   useEffect(() => {
-    let connectionId: string | null = null;
-    
-    const initializeSimpleWebSocket = () => {
-      // Simple WebSocket connection for collaboration
-      const wsUrl = `ws://localhost:5000/ws/collaboration/${currentSchema.id}`;
-      
+    // Initialize collaboration service for real-time collaboration
+    const initializeCollaboration = async () => {
+      if (!currentSchema?.id) return;
+
       try {
-        connectionId = simpleWebSocketService.connect(wsUrl, {
-          onOpen: () => {
-            console.log('✅ Simple Collaboration connected');
-            setIsCollaborationConnected(true);
-          },
-          onClose: () => {
-            console.log('❌ Simple Collaboration disconnected');
-            setIsCollaborationConnected(false);
-          },
-          onMessage: (message) => {
-            console.log('📨 Collaboration message:', message);
-            // Handle collaboration messages here
-          },
-          onError: (error) => {
-            console.error('❌ Simple Collaboration error:', error);
-          },
-          enableReconnect: false // Disable auto-reconnect for now
-        });
+        // Create a demo user for collaboration
+        const demoUser: CollaborationUser = {
+          id: `user_${Date.now()}`,
+          username: `user_${Math.random().toString(36).substr(2, 8)}`,
+          role: 'editor',
+          color: `hsl(${Math.random() * 360}, 70%, 50%)`
+        };
+
+        // Initialize and connect collaboration service
+        collaborationService.initialize(demoUser, currentSchema.id);
+
+        // Set up event handlers
+        const handleConnected = () => {
+          console.log('✅ Collaboration connected');
+          setIsCollaborationConnected(true);
+        };
+
+        const handleDisconnected = () => {
+          console.log('❌ Collaboration disconnected');
+          setIsCollaborationConnected(false);
+        };
+
+        const handleCursorUpdate = (cursor: any) => {
+          console.log('📍 Cursor update received:', cursor);
+          if (cursor && cursor.userId) {
+            setCollaborativeCursors(prev => {
+              const filtered = prev.filter(c => c.userId !== cursor.userId);
+              return [...filtered, {
+                userId: cursor.userId,
+                username: cursor.username || 'Unknown',
+                position: cursor.position || { x: 0, y: 0 },
+                color: cursor.color || '#3B82F6',
+                lastSeen: cursor.lastSeen || new Date().toISOString()
+              }];
+            });
+          }
+        };
+
+        const handleUserJoined = (user: CollaborationUser) => {
+          console.log('👋 User joined:', user?.username);
+        };
+
+        const handleUserLeft = (userId: string) => {
+          console.log('👋 User left:', userId);
+          setCollaborativeCursors(prev => prev.filter(c => c.userId !== userId));
+        };
+
+        const handleError = (error: any) => {
+          console.error('❌ Collaboration error:', error);
+          setIsCollaborationConnected(false);
+        };
+
+        // Register event handlers
+        collaborationService.on('connected', handleConnected);
+        collaborationService.on('disconnected', handleDisconnected);
+        collaborationService.on('cursor_update', handleCursorUpdate);
+        collaborationService.on('user_joined', handleUserJoined);
+        collaborationService.on('user_left', handleUserLeft);
+        collaborationService.on('error', handleError);
+
+        // Connect to collaboration service
+        await collaborationService.connect();
+
+        // Cleanup function
+        return () => {
+          collaborationService.off('connected', handleConnected);
+          collaborationService.off('disconnected', handleDisconnected);
+          collaborationService.off('cursor_update', handleCursorUpdate);
+          collaborationService.off('user_joined', handleUserJoined);
+          collaborationService.off('user_left', handleUserLeft);
+          collaborationService.off('error', handleError);
+          collaborationService.disconnect();
+        };
+
       } catch (error) {
         console.error('Failed to initialize collaboration:', error);
+        setIsCollaborationConnected(false);
       }
     };
 
-    // Delay initialization to prevent spam
-    const timeoutId = setTimeout(() => {
-      initializeSimpleWebSocket();
-    }, 2000);
+    // Add delay to prevent connection spam
+    const timeoutId = setTimeout(initializeCollaboration, 1000);
 
-    // Cleanup
     return () => {
       clearTimeout(timeoutId);
-      if (connectionId) {
-        simpleWebSocketService.disconnect(connectionId);
-      }
     };
-  }, [currentSchema.id]);
+  }, [currentSchema?.id]);
 
   // Panel toggles
   const toggleLeftPanel = () => setLeftPanelOpen(p => !p);
@@ -73,7 +121,7 @@ const MainLayout: React.FC = () => {
 
   // Cursor move broadcast
   const handleCursorMove = (pos: { x: number; y: number; tableId?: string; columnId?: string }) => {
-    if (isCollaborationConnected) {
+    if (isCollaborationConnected && collaborationService.isConnectedState()) {
       collaborationService.sendCursorUpdate(pos);
     }
   };
