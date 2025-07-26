@@ -32,7 +32,7 @@ const Invitation      = require('./src/models/Invitation.cjs');
 const Member          = require('./src/models/Member.cjs');
 
 // Config
-//const PORT           = process.env.SERVER_PORT    || 5000;
+const PORT           = process.env.SERVER_PORT    || 5000;
 const MONGO_URL      = process.env.MONGO_URL;
 const FRONTEND_ORIGIN= process.env.FRONTEND_ORIGIN || 'http://localhost:5173';
 const SMTP_PORT      = Number(process.env.SMTP_PORT);
@@ -753,36 +753,74 @@ app.post('/api/paypal/capture-order', async (req, res) => {
 
 app.ws('/ws/collaboration/:schemaId', (ws, req) => {
   const { schemaId } = req.params;
-  console.log(`Yeni socket açıldı: ${schemaId}`);
+  console.log(`👥 Collaboration socket opened: ${schemaId}`);
+
+  // Heartbeat to keep connection alive
+  const heartbeat = setInterval(() => {
+    if (ws.readyState === 1) {
+      ws.ping();
+    } else {
+      clearInterval(heartbeat);
+    }
+  }, 30000);
 
   ws.on('message', msg => {
-    wsInstance.getWss().clients.forEach(client => {
-      if (client !== ws && client.readyState === 1) {
-        client.send(msg);
-      }
-    });
+    try {
+      wsInstance.getWss().clients.forEach(client => {
+        if (client !== ws && client.readyState === 1) {
+          client.send(msg);
+        }
+      });
+    } catch (error) {
+      console.error('Error broadcasting message:', error);
+    }
   });
 
   ws.on('close', () => {
-    console.log(`Socket bağlandı: ${schemaId}`);
+    console.log(`👥 Collaboration socket closed: ${schemaId}`);
+    clearInterval(heartbeat);
+  });
+
+  ws.on('error', (error) => {
+    console.error(`👥 Collaboration socket error for ${schemaId}:`, error);
+    clearInterval(heartbeat);
   });
 });
 // server.cjs (express-ws konfiqurasiyasından sonra)
 app.ws('/ws/portfolio-updates', (ws, req) => {
-  console.log('➿ Client subscribed to portfolio-updates');
+  console.log('📋 Client subscribed to portfolio-updates');
+
+  // Heartbeat to prevent connection drops
+  const heartbeat = setInterval(() => {
+    if (ws.readyState === 1) {
+      ws.ping();
+    } else {
+      clearInterval(heartbeat);
+    }
+  }, 30000);
 
   // Nümunə: maqəzaları broadcast etmək üçün:
   ws.on('message', msg => {
-    // Gələn portfolio yenilənməsini bütün digər client-lərə yolla
-    wsInstance.getWss().clients.forEach(client => {
-      if (client !== ws && client.readyState === 1) {
-        client.send(msg);
-      }
-    });
+    try {
+      // Gələn portfolio yenilənməsini bütün digər client-lərə yolla
+      wsInstance.getWss().clients.forEach(client => {
+        if (client !== ws && client.readyState === 1) {
+          client.send(msg);
+        }
+      });
+    } catch (error) {
+      console.error('Error broadcasting portfolio update:', error);
+    }
   });
 
   ws.on('close', () => {
-    console.log('❌ portfolio-updates socket closed');
+    console.log('📋 Portfolio-updates socket closed');
+    clearInterval(heartbeat);
+  });
+
+  ws.on('error', (error) => {
+    console.error('📋 Portfolio-updates socket error:', error);
+    clearInterval(heartbeat);
   });
 });
 

@@ -100,11 +100,11 @@ const [collaborationStatus, setCollaborationStatus] = useState<CollaborationStat
   // State for copied code feedback
   const [copiedCode, setCopiedCode] = useState('');
   
-  // Real WebSocket connection for collaboration
-  const wsUrl = import.meta.env.DEV 
-    ? `ws://localhost:8080/collaboration/${currentSchema.id}`
+    // Real WebSocket connection for collaboration
+  const wsUrl = import.meta.env.DEV
+    ? `ws://localhost:5000/ws/collaboration/${currentSchema.id}`
     : `wss://${window.location.host}/ws/collaboration/${currentSchema.id}`;
-    
+
   const { isConnected: socketConnected, sendMessage } = useWebSocket({
     url: wsUrl,
     onOpen: () => {
