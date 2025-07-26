@@ -48,17 +48,23 @@ const MainLayout: React.FC = () => {
         };
 
         const handleCursorUpdate = (cursor: any) => {
-          console.log('📍 Cursor update received:', cursor);
-          if (cursor && cursor.userId) {
+          console.log('📍 Cursor update received in MainLayout:', cursor);
+          if (cursor && cursor.userId && typeof cursor.userId === 'string') {
             setCollaborativeCursors(prev => {
               const filtered = prev.filter(c => c.userId !== cursor.userId);
               return [...filtered, {
                 userId: cursor.userId,
-                username: cursor.username || 'Unknown',
+                username: cursor.username || 'Unknown User',
                 position: cursor.position || { x: 0, y: 0 },
                 color: cursor.color || '#3B82F6',
                 lastSeen: cursor.lastSeen || new Date().toISOString()
               }];
+            });
+          } else {
+            console.warn('⚠️ Invalid cursor data received in MainLayout:', {
+              cursor,
+              hasUserId: !!cursor?.userId,
+              userIdType: typeof cursor?.userId
             });
           }
         };
@@ -105,8 +111,8 @@ const MainLayout: React.FC = () => {
       }
     };
 
-    // Add delay to prevent connection spam
-    const timeoutId = setTimeout(initializeCollaboration, 1000);
+    // Add small delay to prevent connection spam
+    const timeoutId = setTimeout(initializeCollaboration, 500);
 
     return () => {
       clearTimeout(timeoutId);

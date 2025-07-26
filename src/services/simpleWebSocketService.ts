@@ -22,14 +22,21 @@ class SimpleWebSocketService {
   } = {}): string {
     const connectionId = `${url}_${Date.now()}`;
     
-    // Close existing connection for this URL if any
+    // Close existing connections for this URL to prevent duplicates
     const existingConnections = Array.from(this.connections.entries())
-      .filter(([id, socket]) => id.startsWith(url));
+      .filter(([id, socket]) => id.includes(url.split('/').pop() || ''));
     
     existingConnections.forEach(([id, socket]) => {
       console.log(`🔌 Closing existing connection: ${id}`);
-      socket.close();
+      socket.close(1000, 'Replacing with new connection');
       this.connections.delete(id);
+      
+      // Clear any reconnect timeout for the old connection
+      const timeout = this.reconnectTimeouts.get(id);
+      if (timeout) {
+        clearTimeout(timeout);
+        this.reconnectTimeouts.delete(id);
+      }
     });
 
     try {
@@ -44,23 +51,33 @@ class SimpleWebSocketService {
       socket.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
+          console.log(`📨 WebSocket message received:`, data.type, data);
           options.onMessage?.(data);
         } catch (error) {
-          console.error('Failed to parse WebSocket message:', error);
+          console.error('Failed to parse WebSocket message:', error, event.data);
         }
       };
 
       socket.onclose = (event) => {
-        console.log(`❌ WebSocket closed: ${url} - Code: ${event.code}`);
+        console.log(`❌ WebSocket closed: ${url} - Code: ${event.code}, Reason: ${event.reason || 'Unknown'}`);
         this.connections.delete(connectionId);
+        
+        // Clear any existing reconnect timeout
+        const existingTimeout = this.reconnectTimeouts.get(connectionId);
+        if (existingTimeout) {
+          clearTimeout(existingTimeout);
+          this.reconnectTimeouts.delete(connectionId);
+        }
+        
         options.onClose?.();
 
-        // Only reconnect if explicitly enabled and not a normal close
-        if (options.enableReconnect && event.code !== 1000) {
+        // Only reconnect for unexpected closures (not manual disconnects)
+        if (options.enableReconnect && event.code !== 1000 && event.code !== 1001) {
+          // Exponential backoff for reconnection
           const timeout = setTimeout(() => {
-            console.log(`🔄 Reconnecting to: ${url}`);
+            console.log(`🔄 Reconnecting to: ${url} (previous code: ${event.code})`);
             this.connect(url, options);
-          }, 5000);
+          }, 3000); // Reduced from 5s to 3s
           this.reconnectTimeouts.set(connectionId, timeout);
         }
       };

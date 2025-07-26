@@ -4,7 +4,6 @@ const http = require('http');
 const url = require('url');
 const express = require('express');
 const cors = require('cors');
-const expressWs = require('express-ws')(app, server);
 
 const PORT = process.env.WEBSOCKET_PORT || 5000;
 
@@ -15,13 +14,13 @@ console.log(`🌐 Environment: ${process.env.NODE_ENV || 'development'}`);
 // Create HTTP server
 const app = express();
 app.use(cors());
+const server = http.createServer(app);
+const expressWs = require('express-ws')(app, server);
 
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
-
-const server = http.createServer(app);
 
 // Create WebSocket server
 const wss = new WebSocket.Server({ server });

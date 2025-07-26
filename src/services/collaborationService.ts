@@ -75,13 +75,17 @@ export default class CollaborationService {
             console.log('✅ Collaboration WebSocket connected successfully');
             this.isConnected = true;
             
-            // Send user join message after connection is established
-            this.sendMessage({
-              type: 'user_join',
-              userId: this.currentUser!.id,
-              username: this.currentUser!.username,
-              schemaId: this.schemaId!
-            });
+            // Send user join message after a small delay to ensure connection is fully established
+            setTimeout(() => {
+              if (this.isConnected && this.connectionId) {
+                this.sendMessage({
+                  type: 'user_join',
+                  userId: this.currentUser!.id,
+                  username: this.currentUser!.username,
+                  schemaId: this.schemaId!
+                });
+              }
+            }, 100);
             
             this.emit('connected');
             resolve();
@@ -114,7 +118,8 @@ export default class CollaborationService {
     
     switch (message.type) {
       case 'connection_established':
-        console.log('🔗 Connection established:', message.clientId);
+        console.log('🔗 Connection established with server, clientId:', message.clientId);
+        // Optionally store clientId for future reference
         break;
         
       case 'user_joined':
@@ -128,12 +133,19 @@ export default class CollaborationService {
         break;
         
       case 'cursor_update':
-        // Fix: ensure cursor data has proper structure
+        // Server sends cursor data in 'data' field, handle both cases
         const cursorData = message.data || message.cursor;
         if (cursorData && cursorData.userId) {
+          console.log('📍 Valid cursor update received:', cursorData);
           this.emit('cursor_update', cursorData);
         } else {
-          console.warn('⚠️ Invalid cursor_update message structure:', message);
+          console.warn('⚠️ Invalid cursor_update message structure:', {
+            hasData: !!message.data,
+            hasCursor: !!message.cursor,
+            dataUserId: message.data?.userId,
+            cursorUserId: message.cursor?.userId,
+            fullMessage: message
+          });
         }
         break;
         
@@ -251,21 +263,28 @@ export default class CollaborationService {
   disconnect() {
     this.isIntentionalDisconnect = true;
     
-    if (this.connectionId && this.currentUser) {
+    if (this.connectionId && this.currentUser && this.isConnected) {
+      // Send leave message only if we're actually connected
       this.sendMessage({
         type: 'user_leave',
         userId: this.currentUser.id,
         schemaId: this.schemaId
       });
-    }
-    
-    if (this.connectionId) {
+      
+      // Small delay to ensure the message is sent before disconnecting
+      setTimeout(() => {
+        if (this.connectionId) {
+          simpleWebSocketService.disconnect(this.connectionId);
+          this.connectionId = null;
+        }
+      }, 50);
+    } else if (this.connectionId) {
       simpleWebSocketService.disconnect(this.connectionId);
       this.connectionId = null;
     }
     
     this.isConnected = false;
-    console.log('🔌 Disconnected from WebSocket');
+    console.log('🔌 Disconnected from Collaboration WebSocket');
   }
 
   // Utility methods
