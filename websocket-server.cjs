@@ -122,11 +122,34 @@ app.ws('/ws/collaboration/:schemaId', (ws, req) => {
           break;
           
         case 'cursor_update':
-          // Broadcast cursor position to other users
-          broadcastToSchema(schemaId, {
-            type: 'cursor_update',
-            data: message.cursor
-          }, message.cursor?.userId);
+          // Validate cursor data before broadcasting
+          if (message.cursor && 
+              typeof message.cursor === 'object' && 
+              message.cursor.userId && 
+              typeof message.cursor.userId === 'string') {
+            
+            // Broadcast cursor position to other users
+            broadcastToSchema(schemaId, {
+              type: 'cursor_update',
+              data: message.cursor
+            }, message.cursor.userId);
+            
+            console.log(`📍 Cursor update from ${message.cursor.username || message.cursor.userId} broadcasted`);
+          } else {
+            console.warn('⚠️ Invalid cursor_update message received:', {
+              hasCursor: !!message.cursor,
+              cursorType: typeof message.cursor,
+              hasUserId: !!message.cursor?.userId,
+              userIdType: typeof message.cursor?.userId,
+              fullMessage: message
+            });
+            
+            // Send error response to sender only
+            ws.send(JSON.stringify({
+              type: 'error',
+              message: 'Invalid cursor_update format. Expected cursor object with userId.'
+            }));
+          }
           break;
           
         case 'schema_change':
@@ -227,13 +250,27 @@ const heartbeatInterval = setInterval(() => {
   connections.forEach((schemaConnections, schemaId) => {
     schemaConnections.forEach(ws => {
       if (!ws.isAlive) {
-        console.log(`💀 Terminating dead connection for schema: ${schemaId}`);
+        console.log(`💀 Terminating dead connection for schema: ${schemaId}, user: ${ws.username || ws.userId || 'unknown'}`);
         cleanupConnection(ws, schemaId);
         return ws.terminate();
       }
       
+      // Reset alive flag and send ping
       ws.isAlive = false;
-      ws.ping();
+      
+      // Only ping if connection is open
+      if (ws.readyState === 1) { // 1 = OPEN
+        try {
+          ws.ping();
+        } catch (error) {
+          console.error(`❌ Error sending ping to ${ws.username || ws.userId}:`, error);
+          cleanupConnection(ws, schemaId);
+        }
+      } else {
+        // Connection is not open, clean it up
+        console.log(`🧹 Cleaning up non-open connection (state: ${ws.readyState}) for schema: ${schemaId}`);
+        cleanupConnection(ws, schemaId);
+      }
     });
   });
 }, 30000); // Check every 30 seconds
@@ -259,10 +296,4 @@ process.on('SIGTERM', () => {
 server.listen(PORT, () => {
   console.log(`🚀 WebSocket server running on port ${PORT}`);
   console.log(`📡 Real-time collaboration enabled`);
-  console.log(`🔗 WebSocket endpoints:`);
-  console.log(`   - ws://localhost:${PORT}/ws/collaboration/:schemaId`);
-  console.log(`   - ws://localhost:${PORT}/ws/portfolio-updates`);
-});
-
-// Export for testing
-module.exports = { server, connections, userSessions };
+  console.log(`

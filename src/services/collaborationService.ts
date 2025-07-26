@@ -75,17 +75,24 @@ export default class CollaborationService {
             console.log('✅ Collaboration WebSocket connected successfully');
             this.isConnected = true;
             
-            // Send user join message after a small delay to ensure connection is fully established
+            // Send user join message after a delay to ensure connection is fully established
+            // and to prevent sending messages before the server is ready to handle them
             setTimeout(() => {
-              if (this.isConnected && this.connectionId) {
+              if (this.isConnected && 
+                  this.connectionId && 
+                  simpleWebSocketService.isConnected(this.connectionId)) {
+                
+                console.log('📤 Sending user_join message');
                 this.sendMessage({
                   type: 'user_join',
                   userId: this.currentUser!.id,
                   username: this.currentUser!.username,
                   schemaId: this.schemaId!
                 });
+              } else {
+                console.warn('⚠️ Connection not ready for user_join message');
               }
-            }, 200); // Increased delay to 200ms
+            }, 300); // Increased delay to 300ms for better reliability
             
             this.emit('connected');
             resolve();
@@ -136,22 +143,41 @@ export default class CollaborationService {
         // Server sends cursor data in 'data' field according to websocket-server.cjs
         const cursorData = message.data;
         
-        // Validate cursor data structure
+        // Validate cursor data structure with more robust checks
         if (cursorData && 
             typeof cursorData === 'object' && 
             cursorData.userId && 
-            typeof cursorData.userId === 'string') {
+            typeof cursorData.userId === 'string' &&
+            cursorData.userId.trim().length > 0) {
           
           console.log('📍 Valid cursor update received:', cursorData);
           this.emit('cursor_update', cursorData);
         } else {
           console.warn('⚠️ Invalid cursor_update message structure:', {
-            message,
-            hasData: !!message.data,
-            dataType: typeof message.data,
-            dataUserId: message.data?.userId,
-            userIdType: typeof message.data?.userId
+            hasMessage: !!message,
+            messageType: typeof message,
+            hasData: !!message?.data,
+            dataType: typeof message?.data,
+            dataContent: message?.data,
+            hasUserId: !!message?.data?.userId,
+            userIdType: typeof message?.data?.userId,
+            userIdValue: message?.data?.userId,
+            fullMessage: message
           });
+          
+          // Try alternative cursor structure (in case server sends it differently)
+          const alternativeCursor = message.cursor;
+          if (alternativeCursor && 
+              typeof alternativeCursor === 'object' && 
+              alternativeCursor.userId && 
+              typeof alternativeCursor.userId === 'string' &&
+              alternativeCursor.userId.trim().length > 0) {
+            
+            console.log('📍 Valid cursor update received (alternative structure):', alternativeCursor);
+            this.emit('cursor_update', alternativeCursor);
+          } else {
+            console.error('❌ Completely invalid cursor_update message - skipping:', message);
+          }
         }
         break;
         

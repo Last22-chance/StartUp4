@@ -20,112 +20,51 @@ const MainLayout: React.FC = () => {
   const { currentSchema, syncWorkspaceWithMongoDB } = useDatabase();
 
   useEffect(() => {
-    // Initialize collaboration service for real-time collaboration
-    const initializeCollaboration = async () => {
-      if (!currentSchema?.id) return;
-
-      try {
-        // Create a demo user for collaboration
-        const demoUser: CollaborationUser = {
-          id: `user_${Date.now()}`,
-          username: `user_${Math.random().toString(36).substr(2, 8)}`,
-          role: 'editor',
-          color: `hsl(${Math.random() * 360}, 70%, 50%)`
-        };
-
-        // Initialize and connect collaboration service
-        collaborationService.initialize(demoUser, currentSchema.id);
-
-        // Set up event handlers
-        const handleConnected = () => {
-          console.log('✅ Collaboration connected');
-          setIsCollaborationConnected(true);
-        };
-
-        const handleDisconnected = () => {
-          console.log('❌ Collaboration disconnected');
-          setIsCollaborationConnected(false);
-        };
-
-        const handleCursorUpdate = (cursor: any) => {
-          console.log('📍 Cursor update received in MainLayout:', cursor);
-          
-          // Robust validation for cursor data
-          if (cursor && 
-              typeof cursor === 'object' && 
-              cursor.userId && 
-              typeof cursor.userId === 'string' &&
-              cursor.userId.trim().length > 0) {
+    // Note: Collaboration is now handled entirely by RealTimeCollaboration component
+    // This prevents duplicate connections and event handler conflicts
+    
+    // We only need to listen for collaboration updates from the dedicated component
+    const handleCollaborationUpdate = (event: CustomEvent) => {
+      const { type, data } = event.detail;
+      
+      switch (type) {
+        case 'cursor_update':
+          if (data && 
+              typeof data === 'object' && 
+              data.userId && 
+              typeof data.userId === 'string' &&
+              data.userId.trim().length > 0) {
             
             setCollaborativeCursors(prev => {
-              const filtered = prev.filter(c => c.userId !== cursor.userId);
+              const filtered = prev.filter(c => c.userId !== data.userId);
               return [...filtered, {
-                userId: cursor.userId,
-                username: cursor.username || 'Unknown User',
-                position: cursor.position || { x: 0, y: 0 },
-                color: cursor.color || '#3B82F6',
-                lastSeen: cursor.lastSeen || new Date().toISOString()
+                userId: data.userId,
+                username: data.username || 'Unknown User',
+                position: data.position || { x: 0, y: 0 },
+                color: data.color || '#3B82F6',
+                lastSeen: data.lastSeen || new Date().toISOString()
               }];
             });
-          } else {
-            console.warn('⚠️ Invalid cursor data received in MainLayout:', {
-              cursor,
-              cursorType: typeof cursor,
-              hasUserId: !!cursor?.userId,
-              userIdType: typeof cursor?.userId,
-              userIdValue: cursor?.userId,
-              isValidString: cursor?.userId && typeof cursor.userId === 'string' && cursor.userId.trim().length > 0
-            });
           }
-        };
-
-        const handleUserJoined = (user: CollaborationUser) => {
-          console.log('👋 User joined:', user?.username);
-        };
-
-        const handleUserLeft = (userId: string) => {
-          console.log('👋 User left:', userId);
-          setCollaborativeCursors(prev => prev.filter(c => c.userId !== userId));
-        };
-
-        const handleError = (error: any) => {
-          console.error('❌ Collaboration error:', error);
-          setIsCollaborationConnected(false);
-        };
-
-        // Register event handlers
-        collaborationService.on('connected', handleConnected);
-        collaborationService.on('disconnected', handleDisconnected);
-        collaborationService.on('cursor_update', handleCursorUpdate);
-        collaborationService.on('user_joined', handleUserJoined);
-        collaborationService.on('user_left', handleUserLeft);
-        collaborationService.on('error', handleError);
-
-        // Connect to collaboration service
-        await collaborationService.connect();
-
-        // Cleanup function
-        return () => {
-          collaborationService.off('connected', handleConnected);
-          collaborationService.off('disconnected', handleDisconnected);
-          collaborationService.off('cursor_update', handleCursorUpdate);
-          collaborationService.off('user_joined', handleUserJoined);
-          collaborationService.off('user_left', handleUserLeft);
-          collaborationService.off('error', handleError);
-          collaborationService.disconnect();
-        };
-
-      } catch (error) {
-        console.error('Failed to initialize collaboration:', error);
-        setIsCollaborationConnected(false);
+          break;
+          
+        case 'user_left':
+          if (data && data.userId) {
+            setCollaborativeCursors(prev => prev.filter(c => c.userId !== data.userId));
+          }
+          break;
+          
+        case 'connection_status':
+          setIsCollaborationConnected(data.connected);
+          break;
       }
     };
 
-    // Add small delay to prevent connection spam
-    const timeoutId = setTimeout(initializeCollaboration, 500);
+    // Listen for collaboration events from RealTimeCollaboration component
+    window.addEventListener('collaboration-event', handleCollaborationUpdate as EventListener);
 
     return () => {
-      clearTimeout(timeoutId);
+      window.removeEventListener('collaboration-event', handleCollaborationUpdate as EventListener);
     };
   }, [currentSchema?.id]);
 
@@ -137,8 +76,18 @@ const MainLayout: React.FC = () => {
 
   // Cursor move broadcast
   const handleCursorMove = (pos: { x: number; y: number; tableId?: string; columnId?: string }) => {
-    if (isCollaborationConnected && collaborationService.isConnectedState()) {
-      collaborationService.sendCursorUpdate(pos);
+    // Only broadcast if collaboration is connected and we have a valid position
+    if (isCollaborationConnected && 
+        collaborationService.isConnectedState() && 
+        pos && 
+        typeof pos.x === 'number' && 
+        typeof pos.y === 'number') {
+      
+      try {
+        collaborationService.sendCursorUpdate(pos);
+      } catch (error) {
+        console.warn('⚠️ Failed to send cursor update:', error);
+      }
     }
   };
   

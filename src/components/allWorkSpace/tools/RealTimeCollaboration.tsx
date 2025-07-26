@@ -104,115 +104,170 @@ const [collaborationStatus, setCollaborationStatus] = useState<CollaborationStat
   useEffect(() => {
     if (currentPlan !== 'ultimate' || !currentSchema?.id) {
       setIsConnected(false);
+      // Dispatch disconnection event to MainLayout
+      window.dispatchEvent(new CustomEvent('collaboration-event', {
+        detail: { type: 'connection_status', data: { connected: false } }
+      }));
       return;
     }
 
-    // Set up event handlers for this component's state
-    const handleConnected = () => {
-      setIsConnected(true);
-      setConnectionQuality('excellent');
-      setCollaborationStatus(prev => ({
-        ...prev,
-        isConnected: true,
-        lastSync: new Date().toISOString()
-      }));
-    };
+    // Initialize collaboration service for this component
+    const initializeCollaboration = async () => {
+      try {
+        // Create a demo user for collaboration
+        const demoUser: CollaborationUser = {
+          id: `user_${Date.now()}`,
+          username: `user_${Math.random().toString(36).substr(2, 8)}`,
+          role: 'editor',
+          color: `hsl(${Math.random() * 360}, 70%, 50%)`
+        };
 
-    const handleDisconnected = () => {
-      setIsConnected(false);
-      setCollaborationStatus(prev => ({ ...prev, isConnected: false }));
-    };
+        // Initialize and connect collaboration service
+        collaborationService.initialize(demoUser, currentSchema.id);
 
-    const handleUserJoined = (user: CollaborationUser) => {
-      console.log('👋 User joined collaboration:', user.username);
-      addRealtimeEvent('user_joined', user.id, user.username, user);
-      
-      setCollaborators(prev => {
-        const exists = prev.find(c => c.userId === user.id);
-        if (!exists) {
-          return [...prev, {
-            userId: user.id,
-            username: user.username,
-            role: user.role as any,
-            status: 'online' as const,
-            currentAction: 'Working on schema',
-            joinedAt: new Date()
-          }];
-        }
-        return prev;
-      });
-    };
+        // Set up event handlers for this component's state
+        const handleConnected = () => {
+          setIsConnected(true);
+          setConnectionQuality('excellent');
+          setCollaborationStatus(prev => ({
+            ...prev,
+            isConnected: true,
+            lastSync: new Date().toISOString()
+          }));
+          
+          // Dispatch connection event to MainLayout
+          window.dispatchEvent(new CustomEvent('collaboration-event', {
+            detail: { type: 'connection_status', data: { connected: true } }
+          }));
+        };
 
-    const handleUserLeft = (userId: string) => {
-      console.log('👋 User left collaboration:', userId);
-      setCollaborators(prev => prev.filter(c => c.userId !== userId));
-      setCursors(prev => prev.filter(c => c.userId !== userId));
-      addRealtimeEvent('user_left', userId, 'User', {});
-    };
+        const handleDisconnected = () => {
+          setIsConnected(false);
+          setCollaborationStatus(prev => ({ ...prev, isConnected: false }));
+          
+          // Dispatch disconnection event to MainLayout
+          window.dispatchEvent(new CustomEvent('collaboration-event', {
+            detail: { type: 'connection_status', data: { connected: false } }
+          }));
+        };
 
-    const handleCursorUpdate = (cursor: any) => {
-      if (cursor && 
-          typeof cursor === 'object' && 
-          cursor.userId && 
-          typeof cursor.userId === 'string') {
-        setCursors(prev => {
-          const existing = prev.findIndex(c => c.userId === cursor.userId);
-          const cursorData = {
-            userId: cursor.userId,
-            username: cursor.username || 'Unknown',
-            position: cursor.position || { x: 0, y: 0 },
-            selection: cursor.selection,
-            color: cursor.color || '#3B82F6',
-            lastSeen: new Date(cursor.lastSeen || Date.now())
-          };
+        const handleUserJoined = (user: CollaborationUser) => {
+          console.log('👋 User joined collaboration:', user.username);
+          addRealtimeEvent('user_joined', user.id, user.username, user);
+          
+          setCollaborators(prev => {
+            const exists = prev.find(c => c.userId === user.id);
+            if (!exists) {
+              return [...prev, {
+                userId: user.id,
+                username: user.username,
+                role: user.role as any,
+                status: 'online' as const,
+                currentAction: 'Working on schema',
+                joinedAt: new Date()
+              }];
+            }
+            return prev;
+          });
+        };
 
-          if (existing >= 0) {
-            const updated = [...prev];
-            updated[existing] = cursorData;
-            return updated;
+        const handleUserLeft = (userId: string) => {
+          console.log('👋 User left collaboration:', userId);
+          setCollaborators(prev => prev.filter(c => c.userId !== userId));
+          setCursors(prev => prev.filter(c => c.userId !== userId));
+          addRealtimeEvent('user_left', userId, 'User', {});
+          
+          // Dispatch user left event to MainLayout
+          window.dispatchEvent(new CustomEvent('collaboration-event', {
+            detail: { type: 'user_left', data: { userId } }
+          }));
+        };
+
+        const handleCursorUpdate = (cursor: any) => {
+          if (cursor && 
+              typeof cursor === 'object' && 
+              cursor.userId && 
+              typeof cursor.userId === 'string') {
+            setCursors(prev => {
+              const existing = prev.findIndex(c => c.userId === cursor.userId);
+              const cursorData = {
+                userId: cursor.userId,
+                username: cursor.username || 'Unknown',
+                position: cursor.position || { x: 0, y: 0 },
+                selection: cursor.selection,
+                color: cursor.color || '#3B82F6',
+                lastSeen: new Date(cursor.lastSeen || Date.now())
+              };
+
+              if (existing >= 0) {
+                const updated = [...prev];
+                updated[existing] = cursorData;
+                return updated;
+              }
+              return [...prev, cursorData];
+            });
+            
+            // Dispatch cursor update event to MainLayout
+            window.dispatchEvent(new CustomEvent('collaboration-event', {
+              detail: { type: 'cursor_update', data: cursor }
+            }));
+          } else {
+            console.warn('⚠️ Invalid cursor data in RealTimeCollaboration:', cursor);
           }
-          return [...prev, cursorData];
-        });
-      } else {
-        console.warn('⚠️ Invalid cursor data in RealTimeCollaboration:', cursor);
+        };
+
+        const handleSchemaChange = (message: any) => {
+          console.log('🔄 Schema change received:', message);
+          handleSchemaChangeEvent(message);
+          addRealtimeEvent(message.changeType, message.userId, message.username || 'User', message.data);
+        };
+
+        const handleError = (error: any) => {
+          console.error('❌ Collaboration error:', error);
+          setConnectionQuality('poor');
+        };
+
+        // Register event handlers
+        collaborationService.on('connected', handleConnected);
+        collaborationService.on('disconnected', handleDisconnected);
+        collaborationService.on('user_joined', handleUserJoined);
+        collaborationService.on('user_left', handleUserLeft);
+        collaborationService.on('cursor_update', handleCursorUpdate);
+        collaborationService.on('schema_change', handleSchemaChange);
+        collaborationService.on('error', handleError);
+
+        // Connect to collaboration service
+        await collaborationService.connect();
+
+        // Cleanup
+        return () => {
+          collaborationService.off('connected', handleConnected);
+          collaborationService.off('disconnected', handleDisconnected);
+          collaborationService.off('user_joined', handleUserJoined);
+          collaborationService.off('user_left', handleUserLeft);
+          collaborationService.off('cursor_update', handleCursorUpdate);
+          collaborationService.off('schema_change', handleSchemaChange);
+          collaborationService.off('error', handleError);
+          collaborationService.disconnect();
+        };
+
+      } catch (error) {
+        console.error('Failed to initialize collaboration:', error);
+        setIsConnected(false);
+        setConnectionQuality('poor');
+        
+        // Dispatch error connection event to MainLayout
+        window.dispatchEvent(new CustomEvent('collaboration-event', {
+          detail: { type: 'connection_status', data: { connected: false } }
+        }));
       }
     };
 
-    const handleSchemaChange = (message: any) => {
-      console.log('🔄 Schema change received:', message);
-      handleSchemaChangeEvent(message);
-      addRealtimeEvent(message.changeType, message.userId, message.username || 'User', message.data);
-    };
+    // Small delay to prevent connection spam
+    const timeoutId = setTimeout(initializeCollaboration, 500);
 
-    const handleError = (error: any) => {
-      console.error('❌ Collaboration error:', error);
-      setConnectionQuality('poor');
-    };
-
-    // Register event handlers
-    collaborationService.on('connected', handleConnected);
-    collaborationService.on('disconnected', handleDisconnected);
-    collaborationService.on('user_joined', handleUserJoined);
-    collaborationService.on('user_left', handleUserLeft);
-    collaborationService.on('cursor_update', handleCursorUpdate);
-    collaborationService.on('schema_change', handleSchemaChange);
-    collaborationService.on('error', handleError);
-
-    // Check initial connection state
-    if (collaborationService.isConnectedState()) {
-      setIsConnected(true);
-      setConnectionQuality('excellent');
-    }
-
-    // Cleanup
     return () => {
-      collaborationService.off('connected', handleConnected);
-      collaborationService.off('disconnected', handleDisconnected);
-      collaborationService.off('user_joined', handleUserJoined);
-      collaborationService.off('user_left', handleUserLeft);
-      collaborationService.off('cursor_update', handleCursorUpdate);
-      collaborationService.off('schema_change', handleSchemaChange);
-      collaborationService.off('error', handleError);
+      clearTimeout(timeoutId);
     };
   }, [currentPlan, currentSchema?.id]);
 

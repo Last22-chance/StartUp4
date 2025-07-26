@@ -85,25 +85,38 @@ class SimpleWebSocketService {
         options.onClose?.();
 
         // Only reconnect for unexpected closures and if reconnect is enabled
-        if (options.enableReconnect && 
-            event.code !== 1000 && // Normal closure
-            event.code !== 1001 && // Going away
-            event.code !== 1005) { // No status received (often manual disconnect)
-          
+        // Improved logic to handle 1005 and other common disconnect codes
+        const shouldReconnect = options.enableReconnect && 
+                               event.code !== 1000 && // Normal closure
+                               event.code !== 1001 && // Going away
+                               event.code !== 1006 && // Abnormal closure (often network issues)
+                               !event.wasClean;       // Not a clean disconnect
+        
+        if (shouldReconnect) {
           const attempts = this.reconnectAttempts.get(connectionId) || 0;
           
           if (attempts < this.maxReconnectAttempts) {
-            // Exponential backoff with jitter
-            const delay = this.baseReconnectDelay * Math.pow(2, attempts) + Math.random() * 1000;
+            // Enhanced exponential backoff with jitter and cap
+            const baseDelay = this.baseReconnectDelay;
+            const exponentialDelay = Math.min(baseDelay * Math.pow(2, attempts), 30000); // Cap at 30 seconds
+            const jitter = Math.random() * 2000; // Up to 2 seconds jitter
+            const delay = exponentialDelay + jitter;
             
-            console.log(`🔄 Scheduling reconnection attempt ${attempts + 1}/${this.maxReconnectAttempts} in ${Math.round(delay)}ms`);
+            console.log(`🔄 Scheduling reconnection attempt ${attempts + 1}/${this.maxReconnectAttempts} in ${Math.round(delay)}ms for close code: ${event.code}`);
             
             const timeout = setTimeout(() => {
-              this.reconnectAttempts.set(connectionId, attempts + 1);
-              console.log(`🔄 Reconnecting to: ${url} (attempt ${attempts + 1})`);
-              
-              // Create new connection with same options
-              this.connect(url, options);
+              // Check if we still need to reconnect (user might have disconnected manually)
+              if (this.reconnectAttempts.has(connectionId)) {
+                this.reconnectAttempts.set(connectionId, attempts + 1);
+                console.log(`🔄 Reconnecting to: ${url} (attempt ${attempts + 1})`);
+                
+                // Create new connection with same options
+                try {
+                  this.connect(url, options);
+                } catch (reconnectError) {
+                  console.error(`❌ Reconnection attempt ${attempts + 1} failed:`, reconnectError);
+                }
+              }
             }, delay);
             
             this.reconnectTimeouts.set(connectionId, timeout);
@@ -111,6 +124,9 @@ class SimpleWebSocketService {
             console.warn(`❌ Max reconnection attempts (${this.maxReconnectAttempts}) reached for ${url}`);
             this.reconnectAttempts.delete(connectionId);
           }
+        } else {
+          console.log(`🔌 Not reconnecting - Code: ${event.code}, Clean: ${event.wasClean}, Enabled: ${options.enableReconnect}`);
+          this.reconnectAttempts.delete(connectionId);
         }
       };
 
